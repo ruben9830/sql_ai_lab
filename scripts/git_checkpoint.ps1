@@ -1,5 +1,6 @@
 param(
-    [string]$Message = "checkpoint"
+    [string]$Message = "checkpoint",
+    [switch]$NoPush
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,3 +63,24 @@ $finalMessage = "$Message [$stamp]"
 & $git commit -m $finalMessage
 
 Write-Host "Checkpoint created: $finalMessage"
+
+if ($NoPush) {
+    Write-Host "Skipping push because -NoPush was provided."
+    exit 0
+}
+
+& $git remote get-url origin *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "No 'origin' remote configured yet. Commit saved locally only."
+    exit 0
+}
+
+$branch = (& $git rev-parse --abbrev-ref HEAD).Trim()
+if (-not $branch) {
+    $branch = "master"
+}
+
+& $git push -u origin $branch
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Pushed to origin/$branch"
+}

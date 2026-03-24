@@ -79,6 +79,13 @@ Create a versioned restore point anytime with:
 powershell -ExecutionPolicy Bypass -File scripts/git_checkpoint.ps1 -Message "what changed"
 ```
 
+By default, this command now commits and pushes to GitHub (`origin`) in one step.
+Use this if you want local commit only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/git_checkpoint.ps1 -Message "local checkpoint" -NoPush
+```
+
 Examples:
 
 ```powershell
@@ -86,4 +93,4 @@ powershell -ExecutionPolicy Bypass -File scripts/git_checkpoint.ps1 -Message "ad
 powershell -ExecutionPolicy Bypass -File scripts/git_checkpoint.ps1 -Message "improved chatbot ranking"
 ```
 
-This command initializes git (first run), stages all changes, and creates a timestamped commit.
+This command initializes git (first run), stages all changes, creates a timestamped commit, and pushes the current branch.
