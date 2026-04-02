@@ -32,12 +32,34 @@ copy .env.example .env
 
 - Set `OPENAI_API_KEY` (optional, for AI planning)
 - Set `DATABASE_URL` (optional, required to execute SQL)
+- Set `ALLOWED_TABLES` (optional, comma-separated allowlist for execution safety)
+	- Example: `ALLOWED_TABLES=public.employers,public.liabilities,wage_reports`
 
 5. Run:
 
 ```powershell
 python src/sql_chatbot.py
 ```
+
+## Optional Web UI (Streamlit)
+
+Run the chat app in a browser:
+
+```powershell
+streamlit run src/sql_chatbot_web.py
+```
+
+If Streamlit is not installed yet, run:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Web UI features:
+
+- Chat interface with conversation history
+- Quick filters for `start date`, `end date`, `FEIN`, and `employer id`
+- Download query results as CSV when a query is executed
 
 ## Chat Commands
 

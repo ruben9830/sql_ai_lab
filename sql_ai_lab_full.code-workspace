@@ -1,0 +1,18 @@
+{
+  "folders": [
+    {
+      "path": "."
+    },
+    {
+      "path": "C:\\Users\\rvalenciajr\\OneDrive - Deloitte (O365D)\\Desktop\\PgAdmin Queries"
+    },
+    {
+      "path": "C:\\Users\\rvalenciajr\\OneDrive - Deloitte (O365D)\\Desktop\\QUERIES"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/__pycache__": true
+    }
+  }
+}

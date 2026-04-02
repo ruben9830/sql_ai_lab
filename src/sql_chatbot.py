@@ -26,6 +26,22 @@ class QuerySnippet:
     sql: str
 
 
+@dataclass
+class QueryIntent:
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    fein: Optional[str] = None
+    employer_id: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "fein": self.fein,
+            "employer_id": self.employer_id,
+        }
+
+
 class SQLBibleChatbot:
     def __init__(self, sql_file: Path, max_rows: int = 200):
         self.sql_file = sql_file
@@ -33,6 +49,14 @@ class SQLBibleChatbot:
         self.queries: List[QuerySnippet] = self._load_queries()
         self.client = self._build_openai_client()
         self.database_url = os.getenv("DATABASE_URL", "").strip()
+        self.allowed_tables = self._load_allowed_tables()
+
+    @staticmethod
+    def _load_allowed_tables() -> set[str]:
+        raw = os.getenv("ALLOWED_TABLES", "").strip()
+        if not raw:
+            return set()
+        return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
     def _build_openai_client(self):
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -135,8 +159,70 @@ class SQLBibleChatbot:
         title = " ".join(cleaned)
         return title[:120]
 
-    def search_queries(self, question: str, top_n: int = 5) -> List[QuerySnippet]:
+    @staticmethod
+    def extract_intent(question: str) -> QueryIntent:
+        intent = QueryIntent()
+        lowered = question.lower()
+
+        date_matches = re.findall(r"\b(20\d{2}-\d{2}-\d{2})\b", question)
+        if len(date_matches) >= 2:
+            intent.start_date, intent.end_date = date_matches[0], date_matches[1]
+        elif len(date_matches) == 1:
+            if "from" in lowered or "start" in lowered:
+                intent.start_date = date_matches[0]
+            else:
+                intent.end_date = date_matches[0]
+
+        fein_match = re.search(r"\b(\d{2}-?\d{7})\b", question)
+        if fein_match:
+            raw_fein = fein_match.group(1).replace("-", "")
+            if len(raw_fein) == 9:
+                intent.fein = f"{raw_fein[:2]}-{raw_fein[2:]}"
+
+        employer_match = re.search(
+            r"\b(?:employer|emp)\s*id\b[:#\s-]*([A-Za-z0-9_-]+)",
+            question,
+            re.IGNORECASE,
+        )
+        if employer_match:
+            intent.employer_id = employer_match.group(1).strip()
+
+        return intent
+
+    @staticmethod
+    def _apply_intent_override(base: QueryIntent, override: Optional[dict]) -> QueryIntent:
+        if not override:
+            return base
+
+        for key in ("start_date", "end_date", "fein", "employer_id"):
+            value = (override.get(key) or "").strip() if isinstance(override, dict) else ""
+            if value:
+                setattr(base, key, value)
+        return base
+
+    @staticmethod
+    def _intent_to_terms(intent: QueryIntent) -> List[str]:
+        terms: List[str] = []
+        if intent.start_date:
+            terms.extend([intent.start_date, "start_date", "date"])
+        if intent.end_date:
+            terms.extend([intent.end_date, "end_date", "date"])
+        if intent.fein:
+            terms.extend([intent.fein, intent.fein.replace("-", ""), "fein"])
+        if intent.employer_id:
+            terms.extend([intent.employer_id, "employer", "employer_id"])
+        return terms
+
+    def search_queries(
+        self,
+        question: str,
+        top_n: int = 5,
+        intent: Optional[QueryIntent] = None,
+    ) -> List[QuerySnippet]:
         tokens = set(re.findall(r"[a-zA-Z0-9_]+", question.lower()))
+        if intent:
+            tokens.update(re.findall(r"[a-zA-Z0-9_]+", " ".join(self._intent_to_terms(intent)).lower()))
+
         scored = []
         for q in self.queries:
             haystack = f"{q.title}\n{q.sql[:1000]}".lower()
@@ -146,7 +232,12 @@ class SQLBibleChatbot:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [q for _, q in scored[:top_n]]
 
-    def suggest_with_llm(self, question: str, candidates: List[QuerySnippet]) -> Optional[dict]:
+    def suggest_with_llm(
+        self,
+        question: str,
+        candidates: List[QuerySnippet],
+        intent: Optional[QueryIntent] = None,
+    ) -> Optional[dict]:
         if self.client is None:
             return None
 
@@ -161,6 +252,7 @@ class SQLBibleChatbot:
         )
         user = {
             "question": question,
+            "extracted_intent": intent.to_dict() if intent else {},
             "instructions": [
                 "Return JSON with keys: action, reason, sql, candidate_ids.",
                 "action must be one of: suggest_only, run_query.",
@@ -197,9 +289,35 @@ class SQLBibleChatbot:
 
         return bool(re.match(r"^(select|with)\b", lowered))
 
+    @staticmethod
+    def _extract_table_references(sql: str) -> List[str]:
+        pattern = re.compile(r"\b(?:from|join)\s+([a-zA-Z_][\w\.]*)", re.IGNORECASE)
+        return [m.group(1).strip().strip('"').lower() for m in pattern.finditer(sql)]
+
+    def _check_allowed_tables(self, sql: str) -> tuple[bool, List[str]]:
+        if not self.allowed_tables:
+            return True, []
+
+        disallowed: List[str] = []
+        for table in self._extract_table_references(sql):
+            base = table.split(".")[-1]
+            if table not in self.allowed_tables and base not in self.allowed_tables:
+                disallowed.append(table)
+
+        unique_disallowed = sorted(set(disallowed))
+        return len(unique_disallowed) == 0, unique_disallowed
+
     def run_query(self, sql: str) -> dict:
         if not self._is_read_only_sql(sql):
             return {"ok": False, "error": "Only read-only SELECT/WITH SQL is allowed."}
+
+        tables_ok, disallowed_tables = self._check_allowed_tables(sql)
+        if not tables_ok:
+            return {
+                "ok": False,
+                "error": "Query references table(s) not in ALLOWED_TABLES: "
+                + ", ".join(disallowed_tables),
+            }
 
         if not self.database_url:
             return {"ok": False, "error": "DATABASE_URL is not set."}
@@ -219,9 +337,12 @@ class SQLBibleChatbot:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def answer(self, question: str) -> dict:
-        candidates = self.search_queries(question, top_n=5)
-        llm_plan = self.suggest_with_llm(question, candidates)
+    def answer(self, question: str, intent_override: Optional[dict] = None) -> dict:
+        intent = self.extract_intent(question)
+        intent = self._apply_intent_override(intent, intent_override)
+
+        candidates = self.search_queries(question, top_n=5, intent=intent)
+        llm_plan = self.suggest_with_llm(question, candidates, intent=intent)
 
         if llm_plan:
             action = llm_plan.get("action", "suggest_only")
@@ -234,6 +355,7 @@ class SQLBibleChatbot:
                     "mode": "llm_run_query",
                     "plan": llm_plan,
                     "result": result,
+                    "intent": intent.to_dict(),
                     "fallback_candidates": [self._q_to_dict(q) for q in candidates],
                 }
 
@@ -242,11 +364,13 @@ class SQLBibleChatbot:
             return {
                 "mode": "llm_suggest",
                 "plan": llm_plan,
+                "intent": intent.to_dict(),
                 "suggestions": [self._q_to_dict(q) for q in suggestions],
             }
 
         return {
             "mode": "keyword_suggest",
+            "intent": intent.to_dict(),
             "suggestions": [self._q_to_dict(q) for q in candidates],
         }
 
@@ -258,6 +382,11 @@ class SQLBibleChatbot:
 def print_result(payload: dict):
     mode = payload.get("mode", "unknown")
     print(f"\nMode: {mode}")
+
+    intent = payload.get("intent") or {}
+    if any(intent.values()):
+        print("Extracted intent:")
+        print(json.dumps(intent, indent=2))
 
     if "plan" in payload:
         print("LLM Plan:")
