@@ -49,7 +49,7 @@ def _render_result(result: dict, key_prefix: str) -> None:
         )
 
 
-def _render_payload(payload: dict, key_prefix: str) -> None:
+def _render_payload(payload: dict, key_prefix: str, bot: SQLBibleChatbot | None = None) -> None:
     mode = payload.get("mode", "unknown")
     st.caption(f"Mode: {mode}")
 
@@ -62,6 +62,96 @@ def _render_payload(payload: dict, key_prefix: str) -> None:
     if plan:
         with st.expander("LLM plan"):
             st.json(plan)
+
+    join_draft = payload.get("join_draft")
+    if join_draft:
+        with st.expander("Generated JOIN draft"):
+            st.write(join_draft.get("reason", ""))
+            st.caption(f"Confidence: {join_draft.get('confidence', 'unknown')}")
+            st.caption(
+                f"Tables: {join_draft.get('left_table')} JOIN {join_draft.get('right_table')} "
+                f"on {join_draft.get('join_key')}"
+            )
+            st.markdown("**Parameters**")
+            st.json(join_draft.get("parameters", {}))
+
+            verification = join_draft.get("verification") or {}
+            if verification:
+                status = verification.get("status", "unknown")
+                message = verification.get("message", "")
+                st.markdown("**Schema verification**")
+                if status == "verified":
+                    st.success(message)
+                elif status == "failed":
+                    st.error(message)
+                else:
+                    st.info(message)
+
+            st.code(join_draft.get("sql", ""), language="sql")
+
+            if bot is not None:
+                st.markdown("**Run JOIN Draft Safely**")
+                params = dict(join_draft.get("parameters") or {})
+
+                run_start_date = st.text_input(
+                    "start_date",
+                    value="" if params.get("start_date") is None else str(params.get("start_date")),
+                    key=f"jd_start_date_{key_prefix}",
+                )
+                run_end_date = st.text_input(
+                    "end_date",
+                    value="" if params.get("end_date") is None else str(params.get("end_date")),
+                    key=f"jd_end_date_{key_prefix}",
+                )
+                run_fein = st.text_input(
+                    "fein",
+                    value="" if params.get("fein") is None else str(params.get("fein")),
+                    key=f"jd_fein_{key_prefix}",
+                )
+                run_employer_id = st.text_input(
+                    "employer_id",
+                    value="" if params.get("employer_id") is None else str(params.get("employer_id")),
+                    key=f"jd_employer_id_{key_prefix}",
+                )
+
+                default_quarter = params.get("quarter")
+                if isinstance(default_quarter, str):
+                    default_quarter = 0
+                run_quarter = st.number_input(
+                    "quarter (required)",
+                    min_value=0,
+                    max_value=4,
+                    value=int(default_quarter or 0),
+                    step=1,
+                    key=f"jd_quarter_{key_prefix}",
+                )
+
+                default_year = params.get("year")
+                if isinstance(default_year, str):
+                    default_year = 0
+                run_year = st.number_input(
+                    "year (required)",
+                    min_value=0,
+                    max_value=2100,
+                    value=int(default_year or 0),
+                    step=1,
+                    key=f"jd_year_{key_prefix}",
+                )
+
+                run_disabled = (join_draft.get("verification") or {}).get("status") == "failed"
+                if st.button("Run JOIN Draft", key=f"run_join_{key_prefix}", disabled=run_disabled):
+                    run_result = bot.execute_join_draft(
+                        join_draft,
+                        override_params={
+                            "start_date": run_start_date,
+                            "end_date": run_end_date,
+                            "fein": run_fein,
+                            "employer_id": run_employer_id,
+                            "quarter": int(run_quarter),
+                            "year": int(run_year),
+                        },
+                    )
+                    _render_result(run_result, key_prefix=f"join_exec_{key_prefix}")
 
     result = payload.get("result")
     if result:
@@ -89,12 +179,16 @@ def _build_intent_override(
     end_date: str,
     fein: str,
     employer_id: str,
+    quarter: int,
+    year: int,
 ) -> dict:
     return {
         "start_date": _clean_filter(start_date),
         "end_date": _clean_filter(end_date),
         "fein": _clean_filter(fein),
         "employer_id": _clean_filter(employer_id),
+        "quarter": quarter if quarter in (1, 2, 3, 4) else None,
+        "year": year if year >= 1900 else None,
     }
 
 
@@ -116,6 +210,8 @@ def main() -> None:
         end_date = st.text_input("End date (YYYY-MM-DD)", value="")
         fein = st.text_input("FEIN", value="", placeholder="12-3456789")
         employer_id = st.text_input("Employer ID", value="")
+        quarter = st.number_input("Quarter", min_value=0, max_value=4, value=0, step=1)
+        year = st.number_input("Year", min_value=0, max_value=2100, value=0, step=1)
 
     bot = _get_bot(sql_file=sql_file, max_rows=int(max_rows))
     st.info(f"Loaded {len(bot.queries)} query snippets.")
@@ -127,7 +223,7 @@ def main() -> None:
         with st.chat_message("user"):
             st.markdown(item["question"])
         with st.chat_message("assistant"):
-            _render_payload(item["payload"], key_prefix=f"history_{idx}")
+            _render_payload(item["payload"], key_prefix=f"history_{idx}", bot=bot)
 
     question = st.chat_input("Ask about employers, liabilities, wage reports, or FEIN patterns...")
     if not question:
@@ -143,9 +239,11 @@ def main() -> None:
                 end_date=end_date,
                 fein=fein,
                 employer_id=employer_id,
+                quarter=int(quarter),
+                year=int(year),
             )
             payload = bot.answer(question, intent_override=intent_override)
-        _render_payload(payload, key_prefix="latest")
+        _render_payload(payload, key_prefix="latest", bot=bot)
 
     st.session_state["history"].append({"question": question, "payload": payload})
 

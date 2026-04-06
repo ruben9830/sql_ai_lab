@@ -59,7 +59,33 @@ Web UI features:
 
 - Chat interface with conversation history
 - Quick filters for `start date`, `end date`, `FEIN`, and `employer id`
+- Quarter/year filters for wage-period questions
 - Download query results as CSV when a query is executed
+- Auto-generated JOIN drafts for multi-table questions (liability + wages)
+- JOIN draft confidence and parameter map for safer execution review
+- One-click `Run JOIN Draft` with required parameter validation
+- Schema-aware join-key verification before JOIN draft execution
+
+## Smart JOIN Drafting
+
+When the user asks a multi-table question (for example, liabilities + wages),
+the chatbot can now draft a parameterized JOIN query template.
+
+Safety-oriented behavior:
+
+- Uses named placeholders like `%(quarter)s` and `%(year)s`
+- Returns a `parameters` object to fill and review
+- Returns a `confidence` level (`low`, `medium`, `high`)
+- Still enforces read-only SQL policy for execution
+- Attempts join-key verification against database metadata (`information_schema.columns`)
+
+Execution controls:
+
+- `Run JOIN Draft` requires valid `quarter` and `year`
+- Quarter validation: integer in `[1, 4]`
+- Year validation: integer in `[1900, 2100]`
+- Parameters are sent separately to SQL execution (no unsafe interpolation)
+- If join-key verification fails, JOIN execution is blocked
 
 ## Chat Commands
 
@@ -78,6 +104,12 @@ Web UI features:
 - Execution mode is read-only by design.
 - The app blocks obvious write operations (`INSERT`, `UPDATE`, `DELETE`, etc.).
 - If no OpenAI key is provided, it still works using keyword matching and query suggestions.
+
+## Run Tests
+
+```powershell
+c:\Users\rvalenciajr\sql_ai_lab\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+```
 
 ## Prevent Losing Work
 

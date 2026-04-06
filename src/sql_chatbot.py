@@ -32,6 +32,8 @@ class QueryIntent:
     end_date: Optional[str] = None
     fein: Optional[str] = None
     employer_id: Optional[str] = None
+    quarter: Optional[int] = None
+    year: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -39,6 +41,32 @@ class QueryIntent:
             "end_date": self.end_date,
             "fein": self.fein,
             "employer_id": self.employer_id,
+            "quarter": self.quarter,
+            "year": self.year,
+        }
+
+
+@dataclass
+class JoinDraft:
+    reason: str
+    sql: str
+    left_table: str
+    right_table: str
+    join_key: str
+    parameters: dict
+    confidence: str
+    verification: dict
+
+    def to_dict(self) -> dict:
+        return {
+            "reason": self.reason,
+            "sql": self.sql,
+            "left_table": self.left_table,
+            "right_table": self.right_table,
+            "join_key": self.join_key,
+            "parameters": self.parameters,
+            "confidence": self.confidence,
+            "verification": self.verification,
         }
 
 
@@ -187,6 +215,14 @@ class SQLBibleChatbot:
         if employer_match:
             intent.employer_id = employer_match.group(1).strip()
 
+        quarter_match = re.search(r"\b(?:q|quarter)\s*([1-4])\b", lowered)
+        if quarter_match:
+            intent.quarter = int(quarter_match.group(1))
+
+        year_match = re.search(r"\b(20\d{2})\b", question)
+        if year_match:
+            intent.year = int(year_match.group(1))
+
         return intent
 
     @staticmethod
@@ -198,6 +234,24 @@ class SQLBibleChatbot:
             value = (override.get(key) or "").strip() if isinstance(override, dict) else ""
             if value:
                 setattr(base, key, value)
+
+        if isinstance(override, dict):
+            quarter_value = override.get("quarter")
+            year_value = override.get("year")
+            if quarter_value not in (None, ""):
+                try:
+                    parsed_quarter = int(str(quarter_value).strip())
+                    if 1 <= parsed_quarter <= 4:
+                        base.quarter = parsed_quarter
+                except ValueError:
+                    pass
+            if year_value not in (None, ""):
+                try:
+                    parsed_year = int(str(year_value).strip())
+                    if 1900 <= parsed_year <= 2100:
+                        base.year = parsed_year
+                except ValueError:
+                    pass
         return base
 
     @staticmethod
@@ -211,7 +265,232 @@ class SQLBibleChatbot:
             terms.extend([intent.fein, intent.fein.replace("-", ""), "fein"])
         if intent.employer_id:
             terms.extend([intent.employer_id, "employer", "employer_id"])
+        if intent.quarter:
+            terms.extend([f"q{intent.quarter}", "quarter"])
+        if intent.year:
+            terms.extend([str(intent.year), "year"])
         return terms
+
+    @staticmethod
+    def _has_any(text: str, words: List[str]) -> bool:
+        lowered = text.lower()
+        return any(w in lowered for w in words)
+
+    def _question_needs_join_draft(self, question: str) -> bool:
+        q = question.lower()
+        asks_join = self._has_any(q, ["join", "both", "also", "together", "combined"])
+        mentions_liability = self._has_any(q, ["liability", "liable", "liabilities"])
+        mentions_wage = self._has_any(q, ["wage", "wages", "payroll", "wage report"])
+        return asks_join or (mentions_liability and mentions_wage)
+
+    def _infer_domain_tables(self, candidates: List[QuerySnippet]) -> dict:
+        domain_map = {
+            "liability": ["liability", "liable", "liabilities"],
+            "wage": ["wage", "wages", "payroll", "wage_report"],
+        }
+        found: dict = {"liability": [], "wage": []}
+
+        for c in candidates:
+            text = f"{c.title}\n{c.sql}".lower()
+            refs = self._extract_table_references(c.sql)
+            for domain, words in domain_map.items():
+                if self._has_any(text, words):
+                    found[domain].extend(refs)
+
+        for domain in found:
+            unique = []
+            for t in found[domain]:
+                if t not in unique:
+                    unique.append(t)
+            found[domain] = unique
+
+        return found
+
+    @staticmethod
+    def _guess_join_key(intent: QueryIntent) -> str:
+        if intent.employer_id:
+            return "employer_id"
+        if intent.fein:
+            return "fein"
+        return "employer_id"
+
+    def _build_join_sql(
+        self,
+        left_table: str,
+        right_table: str,
+        join_key: str,
+        intent: QueryIntent,
+    ) -> str:
+        where_lines = ["WHERE 1=1"]
+        if intent.start_date:
+            where_lines.append("  AND l.liability_incurred_date >= %(start_date)s")
+        if intent.end_date:
+            where_lines.append("  AND l.liability_incurred_date <= %(end_date)s")
+        if intent.employer_id:
+            where_lines.append(f"  AND l.{join_key} = %(employer_id)s")
+        if intent.fein:
+            where_lines.append("  AND l.fein = %(fein)s")
+        where_lines.append("  AND w.quarter = %(quarter)s")
+        where_lines.append("  AND w.year = %(year)s")
+
+        where_sql = "\n".join(where_lines)
+
+        return (
+            "-- Draft JOIN query generated from your question\n"
+            "-- Verify table/column names in your database before running\n"
+            f"SELECT\n"
+            f"  l.{join_key} AS employer_key,\n"
+            "  l.liability_incurred_date,\n"
+            "  w.quarter,\n"
+            "  w.year,\n"
+            "  w.amount_due AS wage_amount_due\n"
+            f"FROM {left_table} l\n"
+            f"JOIN {right_table} w\n"
+            f"  ON l.{join_key} = w.{join_key}\n"
+            f"{where_sql}\n"
+            f"LIMIT {self.max_rows};"
+        )
+
+    @staticmethod
+    def _build_join_parameters(intent: QueryIntent) -> dict:
+        return {
+            "start_date": intent.start_date,
+            "end_date": intent.end_date,
+            "fein": intent.fein,
+            "employer_id": intent.employer_id,
+            "quarter": intent.quarter if intent.quarter else "<set-quarter-1-4>",
+            "year": intent.year if intent.year else "<set-year-YYYY>",
+        }
+
+    @staticmethod
+    def _join_confidence(left_table: str, right_table: str, intent: QueryIntent) -> str:
+        score = 0
+        if left_table and right_table and left_table != right_table:
+            score += 1
+        if intent.quarter:
+            score += 1
+        if intent.year:
+            score += 1
+        if intent.employer_id or intent.fein:
+            score += 1
+        if score >= 4:
+            return "high"
+        if score >= 2:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _split_table_name(table_name: str) -> tuple[str, str]:
+        parts = [p for p in table_name.split(".") if p]
+        if len(parts) >= 2:
+            return parts[0], parts[-1]
+        return "public", table_name
+
+    def _table_has_column(self, table_name: str, column_name: str) -> Optional[bool]:
+        if not self.database_url or psycopg is None:
+            return None
+
+        schema_name, simple_table = self._split_table_name(table_name)
+
+        try:
+            with psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = %s
+                          AND table_name = %s
+                          AND column_name = %s
+                        LIMIT 1
+                        """,
+                        (schema_name, simple_table, column_name),
+                    )
+                    return cur.fetchone() is not None
+        except Exception:
+            return None
+
+    def verify_join_key(self, left_table: str, right_table: str, join_key: str) -> dict:
+        left_has = self._table_has_column(left_table, join_key)
+        right_has = self._table_has_column(right_table, join_key)
+
+        if left_has is None or right_has is None:
+            return {
+                "status": "not_checked",
+                "message": "Schema verification not available (DATABASE_URL missing or metadata query failed).",
+                "left_has_join_key": left_has,
+                "right_has_join_key": right_has,
+            }
+
+        if left_has and right_has:
+            return {
+                "status": "verified",
+                "message": "Join key exists in both tables.",
+                "left_has_join_key": True,
+                "right_has_join_key": True,
+            }
+
+        missing = []
+        if not left_has:
+            missing.append(f"{left_table}.{join_key}")
+        if not right_has:
+            missing.append(f"{right_table}.{join_key}")
+
+        return {
+            "status": "failed",
+            "message": "Join key missing in: " + ", ".join(missing),
+            "left_has_join_key": left_has,
+            "right_has_join_key": right_has,
+        }
+
+    def build_join_draft(
+        self,
+        question: str,
+        intent: QueryIntent,
+        candidates: List[QuerySnippet],
+    ) -> Optional[JoinDraft]:
+        if not self._question_needs_join_draft(question):
+            return None
+
+        inferred = self._infer_domain_tables(candidates)
+        liability_tables = inferred.get("liability") or []
+        wage_tables = inferred.get("wage") or []
+
+        if not liability_tables or not wage_tables:
+            return None
+
+        left_table = liability_tables[0]
+        right_table = wage_tables[0]
+        if left_table == right_table and len(wage_tables) > 1:
+            right_table = wage_tables[1]
+
+        if left_table == right_table:
+            return None
+
+        join_key = self._guess_join_key(intent)
+        sql = self._build_join_sql(
+            left_table=left_table,
+            right_table=right_table,
+            join_key=join_key,
+            intent=intent,
+        )
+        parameters = self._build_join_parameters(intent)
+        confidence = self._join_confidence(left_table, right_table, intent)
+        verification = self.verify_join_key(left_table, right_table, join_key)
+        reason = (
+            "Detected a multi-table question (liability + wage context), so generated "
+            "a parameterized JOIN draft you can adapt safely."
+        )
+        return JoinDraft(
+            reason=reason,
+            sql=sql,
+            left_table=left_table,
+            right_table=right_table,
+            join_key=join_key,
+            parameters=parameters,
+            confidence=confidence,
+            verification=verification,
+        )
 
     def search_queries(
         self,
@@ -307,6 +586,100 @@ class SQLBibleChatbot:
         unique_disallowed = sorted(set(disallowed))
         return len(unique_disallowed) == 0, unique_disallowed
 
+    @staticmethod
+    def _is_missing_param_value(value) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            v = value.strip()
+            return v == "" or v.startswith("<set-")
+        return False
+
+    def _normalize_join_parameters(self, params: dict) -> tuple[bool, Optional[dict], str]:
+        required = ("quarter", "year")
+        for key in required:
+            if key not in params or self._is_missing_param_value(params[key]):
+                return False, None, f"Missing required JOIN parameter: {key}"
+
+        normalized = dict(params)
+
+        try:
+            normalized["quarter"] = int(str(normalized["quarter"]).strip())
+        except Exception:
+            return False, None, "Invalid quarter. Use an integer from 1 to 4."
+
+        if normalized["quarter"] < 1 or normalized["quarter"] > 4:
+            return False, None, "Invalid quarter. Use an integer from 1 to 4."
+
+        try:
+            normalized["year"] = int(str(normalized["year"]).strip())
+        except Exception:
+            return False, None, "Invalid year. Use a 4-digit year like 2025."
+
+        if normalized["year"] < 1900 or normalized["year"] > 2100:
+            return False, None, "Invalid year. Use a value between 1900 and 2100."
+
+        for key in ("start_date", "end_date", "fein", "employer_id"):
+            if key in normalized and isinstance(normalized[key], str):
+                normalized[key] = normalized[key].strip() or None
+
+        return True, normalized, ""
+
+    def run_query_with_params(self, sql: str, params: dict) -> dict:
+        if not self._is_read_only_sql(sql):
+            return {"ok": False, "error": "Only read-only SELECT/WITH SQL is allowed."}
+
+        tables_ok, disallowed_tables = self._check_allowed_tables(sql)
+        if not tables_ok:
+            return {
+                "ok": False,
+                "error": "Query references table(s) not in ALLOWED_TABLES: "
+                + ", ".join(disallowed_tables),
+            }
+
+        if not self.database_url:
+            return {"ok": False, "error": "DATABASE_URL is not set."}
+
+        if psycopg is None:
+            return {"ok": False, "error": "psycopg is not installed. Run: pip install -r requirements.txt"}
+
+        try:
+            with psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    cols = [d.name for d in cur.description] if cur.description else []
+                    rows = cur.fetchall() if cols else []
+            return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def execute_join_draft(self, join_draft: dict, override_params: Optional[dict] = None) -> dict:
+        if not join_draft:
+            return {"ok": False, "error": "No join draft found to execute."}
+
+        sql = (join_draft.get("sql") or "").strip()
+        if not sql:
+            return {"ok": False, "error": "Join draft SQL is empty."}
+
+        merged_params = dict(join_draft.get("parameters") or {})
+        if isinstance(override_params, dict):
+            for key, value in override_params.items():
+                if key in merged_params:
+                    merged_params[key] = value
+
+        verification = join_draft.get("verification") or {}
+        if verification.get("status") == "failed":
+            return {
+                "ok": False,
+                "error": "Join draft failed schema verification: " + verification.get("message", "unknown"),
+            }
+
+        ok, normalized, error = self._normalize_join_parameters(merged_params)
+        if not ok:
+            return {"ok": False, "error": error}
+
+        return self.run_query_with_params(sql, normalized or {})
+
     def run_query(self, sql: str) -> dict:
         if not self._is_read_only_sql(sql):
             return {"ok": False, "error": "Only read-only SELECT/WITH SQL is allowed."}
@@ -342,6 +715,7 @@ class SQLBibleChatbot:
         intent = self._apply_intent_override(intent, intent_override)
 
         candidates = self.search_queries(question, top_n=5, intent=intent)
+        join_draft = self.build_join_draft(question, intent, candidates)
         llm_plan = self.suggest_with_llm(question, candidates, intent=intent)
 
         if llm_plan:
@@ -356,6 +730,7 @@ class SQLBibleChatbot:
                     "plan": llm_plan,
                     "result": result,
                     "intent": intent.to_dict(),
+                    "join_draft": join_draft.to_dict() if join_draft else None,
                     "fallback_candidates": [self._q_to_dict(q) for q in candidates],
                 }
 
@@ -365,12 +740,14 @@ class SQLBibleChatbot:
                 "mode": "llm_suggest",
                 "plan": llm_plan,
                 "intent": intent.to_dict(),
+                "join_draft": join_draft.to_dict() if join_draft else None,
                 "suggestions": [self._q_to_dict(q) for q in suggestions],
             }
 
         return {
-            "mode": "keyword_suggest",
+            "mode": "join_draft_suggest" if join_draft else "keyword_suggest",
             "intent": intent.to_dict(),
+            "join_draft": join_draft.to_dict() if join_draft else None,
             "suggestions": [self._q_to_dict(q) for q in candidates],
         }
 
@@ -391,6 +768,23 @@ def print_result(payload: dict):
     if "plan" in payload:
         print("LLM Plan:")
         print(json.dumps(payload["plan"], indent=2))
+
+    join_draft = payload.get("join_draft")
+    if join_draft:
+        print("\nJOIN Draft:")
+        print(join_draft.get("reason", ""))
+        print(
+            f"Tables: {join_draft.get('left_table')} JOIN {join_draft.get('right_table')} "
+            f"ON {join_draft.get('join_key')}"
+        )
+        print(f"Confidence: {join_draft.get('confidence', 'unknown')}")
+        verification = join_draft.get("verification") or {}
+        if verification:
+            print(f"Schema verification: {verification.get('status', 'unknown')}")
+            print(verification.get("message", ""))
+        print("Parameters:")
+        print(json.dumps(join_draft.get("parameters", {}), indent=2))
+        print(join_draft.get("sql", ""))
 
     if "result" in payload:
         result = payload["result"]
