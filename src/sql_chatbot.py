@@ -205,28 +205,39 @@ class SQLBibleChatbot:
 
     @staticmethod
     def _infer_title_from_sql(sql: str) -> str:
-        """Generate a descriptive title from SQL by extracting main operations and tables."""
+        """Generate a business-focused title describing what the query will find."""
         sql_lower = sql.lower()
-        processed = re.sub(r"\s+", " ", sql_lower).strip()
+        
+        if re.search(r"order by.*desc", sql_lower):
+            if "liability" in sql_lower or "amount" in sql_lower:
+                return "Top Employers by Amount Due"
+            if "employer" in sql_lower:
+                return "High-Impact Employer Analysis"
+            return "High-Value Results"
+        
+        if "group by" in sql_lower:
+            if "quarter" in sql_lower or "year" in sql_lower:
+                if "liability" in sql_lower or "wage" in sql_lower:
+                    return "Liability & Wage Trends by Period"
+                return "Temporal Trend Analysis"
+            if "fein" in sql_lower or "employer" in sql_lower:
+                return "Summary by Employer"
+            return "Grouped Analysis"
         
         if "join" in sql_lower:
-            action = "Join"
-        elif "group by" in sql_lower:
-            action = "Summary"
-        elif "union" in sql_lower:
-            action = "Combined Query"
-        else:
-            action = "Query"
+            if "liability" in sql_lower and "wage" in sql_lower:
+                return "Employer Liability & Wage Report"
+            return "Cross-Table Analysis"
         
-        tables = set()
-        for match in re.finditer(r"\bfrom\s+([a-z_][a-z0-9_.]*)", sql_lower):
-            tables.add(match.group(1).split(".")[-1].capitalize())
-        for match in re.finditer(r"\bjoin\s+([a-z_][a-z0-9_.]*)", sql_lower):
-            tables.add(match.group(1).split(".")[-1].capitalize())
+        if "distinct" in sql_lower:
+            return "Unique Records Query"
         
-        if tables:
-            return f"{action}: {' & '.join(sorted(tables)[:3])}"
-        return f"{action} ({len(sql)} chars)"
+        match = re.search(r"from\s+([a-z_][a-z0-9_.]*)", sql_lower)
+        if match:
+            table = match.group(1).split(".")[-1].capitalize()
+            return f"{table} Query"
+        
+        return "Data Query"
     
     @staticmethod
     def _title_from_comments(comments: List[str]) -> str:

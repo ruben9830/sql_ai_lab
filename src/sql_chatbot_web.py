@@ -328,6 +328,9 @@ def main() -> None:
     if "current_exchange" not in st.session_state:
         st.session_state["current_exchange"] = None
 
+    # Results container BEFORE prompts (so results appear at top)
+    results_container = st.container()
+
     selected_prompt = _business_prompt_picker()
     if selected_prompt:
         st.session_state["queued_question"] = selected_prompt
@@ -337,36 +340,38 @@ def main() -> None:
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
 
     if not question:
-        current = st.session_state.get("current_exchange")
-        if current:
-            with st.chat_message("user"):
-                st.markdown(current["question"])
-            with st.chat_message("assistant"):
-                _render_payload(current["payload"], key_prefix="current", bot=bot)
+        with results_container:
+            current = st.session_state.get("current_exchange")
+            if current:
+                with st.chat_message("user"):
+                    st.markdown(current["question"])
+                with st.chat_message("assistant"):
+                    _render_payload(current["payload"], key_prefix="current", bot=bot)
         return
 
-    with st.chat_message("user"):
-        st.markdown(question)
+    with results_container:
+        with st.chat_message("user"):
+            st.markdown(question)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            started = time.perf_counter()
-            intent_override = _build_intent_override(
-                start_date=start_date,
-                end_date=end_date,
-                fein=fein,
-                employer_id=employer_id,
-                quarter=int(quarter),
-                year=int(year),
-            )
-            payload = bot.answer(question, intent_override=intent_override)
-            elapsed = time.perf_counter() - started
-            payload["_metrics"] = {
-                "response_seconds": elapsed,
-                "candidate_count": len(payload.get("suggestions") or payload.get("fallback_candidates") or []),
-                "library_size": len(bot.queries),
-            }
-        _render_payload(payload, key_prefix="latest", bot=bot)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                started = time.perf_counter()
+                intent_override = _build_intent_override(
+                    start_date=start_date,
+                    end_date=end_date,
+                    fein=fein,
+                    employer_id=employer_id,
+                    quarter=int(quarter),
+                    year=int(year),
+                )
+                payload = bot.answer(question, intent_override=intent_override)
+                elapsed = time.perf_counter() - started
+                payload["_metrics"] = {
+                    "response_seconds": elapsed,
+                    "candidate_count": len(payload.get("suggestions") or payload.get("fallback_candidates") or []),
+                    "library_size": len(bot.queries),
+                }
+            _render_payload(payload, key_prefix="latest", bot=bot)
 
     st.session_state["current_exchange"] = {"question": question, "payload": payload}
 
