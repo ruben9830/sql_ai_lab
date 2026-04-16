@@ -140,7 +140,11 @@ class SQLBibleChatbot:
                 comment_buffer = []
                 return
 
-            title = self._title_from_comments(comment_buffer) or f"Query {len(snippets) + 1}"
+            title = self._title_from_comments(comment_buffer)
+            if not title:
+                title = self._infer_title_from_sql(sql)
+            if not title:
+                title = f"Query {len(snippets) + 1}"
             snippets.append(QuerySnippet(id=len(snippets) + 1, title=title, sql=sql))
             comment_buffer = []
 
@@ -199,6 +203,31 @@ class SQLBibleChatbot:
             return bool(re.match(r"^(select|with)\b", lowered))
         return False
 
+    @staticmethod
+    def _infer_title_from_sql(sql: str) -> str:
+        """Generate a descriptive title from SQL by extracting main operations and tables."""
+        sql_lower = sql.lower()
+        processed = re.sub(r"\s+", " ", sql_lower).strip()
+        
+        if "join" in sql_lower:
+            action = "Join"
+        elif "group by" in sql_lower:
+            action = "Summary"
+        elif "union" in sql_lower:
+            action = "Combined Query"
+        else:
+            action = "Query"
+        
+        tables = set()
+        for match in re.finditer(r"\bfrom\s+([a-z_][a-z0-9_.]*)", sql_lower):
+            tables.add(match.group(1).split(".")[-1].capitalize())
+        for match in re.finditer(r"\bjoin\s+([a-z_][a-z0-9_.]*)", sql_lower):
+            tables.add(match.group(1).split(".")[-1].capitalize())
+        
+        if tables:
+            return f"{action}: {' & '.join(sorted(tables)[:3])}"
+        return f"{action} ({len(sql)} chars)"
+    
     @staticmethod
     def _title_from_comments(comments: List[str]) -> str:
         cleaned = []

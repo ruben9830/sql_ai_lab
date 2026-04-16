@@ -331,6 +331,7 @@ def main() -> None:
     selected_prompt = _business_prompt_picker()
     if selected_prompt:
         st.session_state["queued_question"] = selected_prompt
+        st.rerun()
 
     chat_question = st.chat_input("Ask your question (e.g. 'Show me top employers by liability amount')...")
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
