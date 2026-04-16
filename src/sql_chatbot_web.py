@@ -2,6 +2,7 @@ from pathlib import Path
 import csv
 import io
 import os
+import re
 import time
 
 import streamlit as st
@@ -11,13 +12,34 @@ from demo_data import ensure_demo_database
 from sql_chatbot import SQLBibleChatbot
 
 
+def _polish_title(raw_title: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (raw_title or "").replace("_", " ")).strip(" -\t\n.")
+    if not cleaned:
+        return "SQL template"
+
+    tokens = []
+    for token in cleaned.split(" "):
+        upper_token = token.upper()
+        if upper_token in {"SQL", "FEIN", "TPA", "ID"}:
+            tokens.append(upper_token)
+        elif token.isupper() and len(token) > 1:
+            tokens.append(token)
+        else:
+            tokens.append(token.capitalize())
+    return " ".join(tokens)
+
+
 def _render_suggestions(suggestions: list[dict]) -> None:
     if not suggestions:
         return
 
-    st.markdown("### Suggested queries")
-    for s in suggestions:
-        st.markdown(f"**[{s['id']}] {s['title']}**")
+    st.markdown("### Recommended SQL Templates")
+    st.caption("Curated options based on your question and detected filters.")
+    for idx, s in enumerate(suggestions, start=1):
+        polished_title = _polish_title(s.get("title", ""))
+        st.markdown(f"**Recommendation {idx}: {polished_title}**")
+        if s.get("id") is not None:
+            st.caption(f"Template ID: {s['id']}")
         st.code(s.get("sql_preview", ""), language="sql")
 
 
@@ -58,9 +80,9 @@ def _render_metrics(payload: dict) -> None:
         return
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Response time", f"{metrics.get('response_seconds', 0):.2f}s")
-    c2.metric("Candidates", int(metrics.get("candidate_count", 0)))
-    c3.metric("Query snippets", int(metrics.get("library_size", 0)))
+    c1.metric("Response Time", f"{metrics.get('response_seconds', 0):.2f}s")
+    c2.metric("Recommended Templates", int(metrics.get("candidate_count", 0)))
+    c3.metric("Total Library Size", int(metrics.get("library_size", 0)))
 
 
 def _render_payload(payload: dict, key_prefix: str, bot: SQLBibleChatbot | None = None) -> None:
@@ -175,9 +197,10 @@ def _render_payload(payload: dict, key_prefix: str, bot: SQLBibleChatbot | None 
 
     proposed_sql = (payload.get("proposed_sql") or "").strip()
     if proposed_sql:
-        st.markdown("**Proposed SQL (review before execution)**")
+        st.markdown("### Generated SQL (Review & Approve)")
+        st.caption("Inspect the SQL below. Click the button to execute.")
         st.code(proposed_sql, language="sql")
-        if bot is not None and st.button("Approve and Run SQL", key=f"run_proposed_{key_prefix}"):
+        if bot is not None and st.button("Execute Query", key=f"run_proposed_{key_prefix}", type="primary"):
             run_result = bot.run_query(proposed_sql)
             _render_result(run_result, key_prefix=f"proposed_exec_{key_prefix}")
 
@@ -227,7 +250,8 @@ def _build_intent_override(
 
 
 def _business_prompt_picker() -> str:
-    st.markdown("### One-click business prompts")
+    st.markdown("### Quick Start: Sample Questions")
+    st.caption("Click any prompt below to run an example query.")
     prompt_options = [
         "Which employers had the largest month-over-month increase in liability amount due?",
         "Show top FEINs by liability variance between start and end date.",
@@ -237,41 +261,47 @@ def _business_prompt_picker() -> str:
     cols = st.columns(3)
     selected = ""
     for idx, option in enumerate(prompt_options):
-        if cols[idx].button(f"Prompt {idx + 1}", key=f"biz_prompt_{idx}", use_container_width=True):
+        if cols[idx].button(f"Example {idx + 1}", key=f"biz_prompt_{idx}", use_container_width=True, type="secondary"):
             selected = option
-        cols[idx].caption(option)
+        cols[idx].caption(option, help="Click button above to run")
     return selected
 
 
 def main() -> None:
     load_dotenv()
-    st.set_page_config(page_title="SQL AI Lab", page_icon="🧠", layout="wide")
-    st.title("SQL AI Lab")
-    st.write("Ask business questions in plain English, review generated SQL safely, and export results.")
+    st.set_page_config(page_title="SQL AI Copilot", page_icon="🧠", layout="wide")
+    st.title("🧠 SQL AI Copilot")
+    st.write("Convert business questions into SQL queries. Review, execute, and export results—all in seconds.")
 
     with st.sidebar:
-        st.header("Settings")
+        st.header("⚙️ Configuration")
         sql_file = st.text_input("SQL file", value="data/SQL_BIBLE_PRIME.sql")
         max_rows = st.number_input("Max rows", min_value=1, max_value=5000, value=200, step=50)
         data_mode = st.radio("Data mode", options=["Demo (SQLite)", "Enterprise (Postgres)"], index=0)
-        st.caption("Read-only mode allows only SELECT/WITH statements.")
+        st.caption("Safe mode: All queries are read-only (SELECT/WITH only).")
 
         if data_mode == "Demo (SQLite)":
             demo_db_path = st.text_input("Demo DB file", value="data/demo_hackathon.db")
             ensure_demo_database(Path(demo_db_path))
             database_url = f"sqlite:///{demo_db_path}"
             allowed_tables = {"employers", "liabilities", "wage_reports"}
-            st.success("Demo mode is active. Runs without enterprise DB access.")
+            st.success("✓ Demo mode active — no VPN or setup required.")
         else:
             db_override = st.text_input("DATABASE_URL override (optional)", value="", type="password")
             database_url = db_override.strip() or os.getenv("DATABASE_URL", "").strip()
             raw_allowed = os.getenv("ALLOWED_TABLES", "").strip()
             allowed_tables = {item.strip().lower() for item in raw_allowed.split(",") if item.strip()} if raw_allowed else None
-            st.info("Enterprise mode uses your Postgres connection.")
+            st.info("Enterprise mode — connects to your Postgres instance.")
 
         st.divider()
-        st.subheader("Quick filters")
-        st.caption("Optional: these help intent extraction even if your question is short.")
+        if st.button("Clear current result", use_container_width=True):
+            st.session_state.pop("current_exchange", None)
+            st.session_state.pop("queued_question", None)
+            st.rerun()
+
+        st.divider()
+        st.subheader("🔍 Optional Filters")
+        st.caption("Refine results by date range, identifiers, and time period.")
         start_date = st.text_input("Start date (YYYY-MM-DD)", value="")
         end_date = st.text_input("End date (YYYY-MM-DD)", value="")
         fein = st.text_input("FEIN", value="", placeholder="12-3456789")
@@ -285,32 +315,33 @@ def main() -> None:
         database_url=database_url,
         allowed_tables=allowed_tables,
     )
-    st.info(f"Loaded {len(bot.queries)} query snippets.")
-
+    col1, col2 = st.columns(2)
+    col1.info(f"📚 Library: {len(bot.queries)} SQL templates loaded")
     health = bot.probe_connection()
     if health.get("ok"):
-        st.success(health.get("message", "Database connected."))
+        col2.success(f"✓ {health.get('message', 'Database connected.')}")
     else:
-        st.warning(health.get("message", "No database configured."))
+        col2.warning(f"⚠️ {health.get('message', 'No database configured.')}")
 
-    if "history" not in st.session_state:
-        st.session_state["history"] = []
     if "queued_question" not in st.session_state:
         st.session_state["queued_question"] = ""
+    if "current_exchange" not in st.session_state:
+        st.session_state["current_exchange"] = None
 
     selected_prompt = _business_prompt_picker()
     if selected_prompt:
         st.session_state["queued_question"] = selected_prompt
 
-    for idx, item in enumerate(st.session_state["history"]):
-        with st.chat_message("user"):
-            st.markdown(item["question"])
-        with st.chat_message("assistant"):
-            _render_payload(item["payload"], key_prefix=f"history_{idx}", bot=bot)
-
-    chat_question = st.chat_input("Ask about employers, liabilities, wage reports, or FEIN patterns...")
+    chat_question = st.chat_input("Ask your question (e.g. 'Show me top employers by liability amount')...")
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
+
     if not question:
+        current = st.session_state.get("current_exchange")
+        if current:
+            with st.chat_message("user"):
+                st.markdown(current["question"])
+            with st.chat_message("assistant"):
+                _render_payload(current["payload"], key_prefix="current", bot=bot)
         return
 
     with st.chat_message("user"):
@@ -336,7 +367,7 @@ def main() -> None:
             }
         _render_payload(payload, key_prefix="latest", bot=bot)
 
-    st.session_state["history"].append({"question": question, "payload": payload})
+    st.session_state["current_exchange"] = {"question": question, "payload": payload}
 
 
 if __name__ == "__main__":
