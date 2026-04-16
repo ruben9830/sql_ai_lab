@@ -208,11 +208,11 @@ class SQLBibleChatbot:
         """Generate a business-focused title describing what the query will find."""
         sql_lower = sql.lower()
         
-        # Check for specific business patterns
+        # Specific business patterns
         if "not exists" in sql_lower and "wage" in sql_lower:
             return "Employers Without Wage Reports"
         
-        if "inac" in sql_lower or "status" in sql_lower and "inac" in sql:
+        if "inac" in sql_lower or ("status" in sql_lower and "inac" in sql):
             return "Inactive Employers Analysis"
         
         if "delinquent" in sql_lower:
@@ -221,22 +221,51 @@ class SQLBibleChatbot:
         if "tpa" in sql_lower:
             return "TPA Provider Analysis"
         
+        # Date range BETWEEN patterns
+        if "between" in sql_lower:
+            if "rgst_dt" in sql_lower or "registration" in sql_lower:
+                return "Employers Registered in Date Range"
+            if "incurred" in sql_lower or "liability" in sql_lower:
+                return "Liabilities Incurred in Date Range"
+            if "wage" in sql_lower or "rpt_" in sql_lower:
+                return "Wage Reports in Period"
+            return "Records in Date Range"
+        
+        # Date-based WHERE conditions
+        if "rgst_dt" in sql_lower:
+            return "Employers by Registration Date"
+        
+        if "incurred" in sql_lower:
+            if "liability" in sql_lower:
+                return "Liability Amounts by Incurrence Date"
+            return "Records by Incurred Date"
+        
+        if "due_dt" in sql_lower or "due" in sql_lower:
+            return "Items Due by Payment Date"
+        
+        # Sorting patterns
         if re.search(r"order by.*desc", sql_lower):
             if "liability" in sql_lower or "amount" in sql_lower:
                 return "Top Employers by Amount Due"
+            if "count" in sql_lower:
+                return "Rankings by Count"
             if "employer" in sql_lower:
                 return "High-Impact Employer Analysis"
             return "High-Value Results"
         
+        # Grouping patterns
         if "group by" in sql_lower:
-            if "quarter" in sql_lower or "year" in sql_lower:
+            if "quarter" in sql_lower or "year" in sql_lower or "rpt_" in sql_lower:
                 if "liability" in sql_lower or "wage" in sql_lower:
                     return "Liability & Wage Trends by Period"
                 return "Temporal Trend Analysis"
             if "fein" in sql_lower or "employer" in sql_lower:
                 return "Summary by Employer"
+            if "status" in sql_lower:
+                return "Distribution by Status"
             return "Grouped Analysis"
         
+        # Join patterns
         if "join" in sql_lower:
             if "liability" in sql_lower and "wage" in sql_lower:
                 return "Employer Liability & Wage Report"
@@ -245,16 +274,20 @@ class SQLBibleChatbot:
         if "distinct" in sql_lower:
             return "Unique Records Query"
         
-        # Fallback: extract first WHERE condition or main table
-        where_match = re.search(r"where\s+([a-z_.\"]+)\s*[=><]", sql_lower)
+        if "union" in sql_lower:
+            return "Combined Data Query"
+        
+        # Fallback: extract WHERE condition or main table
+        where_match = re.search(r"where\s+([a-z_.\"]+)", sql_lower)
         if where_match:
-            condition = where_match.group(1).strip('\"').split('.')[-1]
-            return f"Filtered by {condition.replace('_', ' ').title()}"
+            condition = where_match.group(1).strip('\"').split('.')[-1].replace('_', ' ').title()
+            if condition:
+                return f"Filtered by {condition}"
         
         match = re.search(r"from\s+([a-z_][a-z0-9_.]*)", sql_lower)
         if match:
-            table = match.group(1).split(".")[-1].capitalize()
-            return f"{table} Query"
+            table = match.group(1).split(".")[-1].replace('_', ' ').title()
+            return f"{table} Data"
         
         return "Data Query"
     
