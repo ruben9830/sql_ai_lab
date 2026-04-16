@@ -328,11 +328,19 @@ def main() -> None:
     if "current_exchange" not in st.session_state:
         st.session_state["current_exchange"] = None
 
-    # Chat input FIRST
+    # Prompts/Examples FIRST (at the top, before chat input)
+    selected_prompt = _business_prompt_picker()
+    if selected_prompt:
+        st.session_state["queued_question"] = selected_prompt
+        st.rerun()
+
+    st.divider()
+
+    # Chat input comes AFTER prompts
     chat_question = st.chat_input("Ask your question (e.g. 'Show me top employers by liability amount')...")
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
 
-    # Results container (inline, not separate)
+    # Results render below chat input (no scroll needed)
     if not question:
         current = st.session_state.get("current_exchange")
         if current:
@@ -364,13 +372,6 @@ def main() -> None:
                 }
             _render_payload(payload, key_prefix="latest", bot=bot)
         st.session_state["current_exchange"] = {"question": question, "payload": payload}
-
-    # Prompts AFTER results
-    st.divider()
-    selected_prompt = _business_prompt_picker()
-    if selected_prompt:
-        st.session_state["queued_question"] = selected_prompt
-        st.rerun()
 
 
 if __name__ == "__main__":
