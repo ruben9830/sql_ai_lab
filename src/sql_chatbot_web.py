@@ -249,24 +249,6 @@ def _build_intent_override(
     }
 
 
-def _business_prompt_picker() -> str:
-    st.markdown("### Quick Start: Sample Questions")
-    st.caption("Click any prompt below to run an example query.")
-    prompt_options = [
-        "Which employers had the largest month-over-month increase in liability amount due?",
-        "Show top FEINs by liability variance between start and end date.",
-        "Summarize liability and wage amount trends by quarter and year.",
-    ]
-
-    cols = st.columns(3)
-    selected = ""
-    for idx, option in enumerate(prompt_options):
-        if cols[idx].button(f"Example {idx + 1}", key=f"biz_prompt_{idx}", use_container_width=True, type="secondary"):
-            selected = option
-        cols[idx].caption(option, help="Click button above to run")
-    return selected
-
-
 def main() -> None:
     load_dotenv()
     st.set_page_config(page_title="SQL AI Copilot", page_icon="🧠", layout="wide")
@@ -309,6 +291,19 @@ def main() -> None:
         quarter = st.number_input("Quarter", min_value=0, max_value=4, value=0, step=1)
         year = st.number_input("Year", min_value=0, max_value=2100, value=0, step=1)
 
+        st.divider()
+        st.subheader("💡 Quick Start")
+        st.caption("Click any example below to run an instant demo.")
+        if st.button("Example 1: Top Employers", use_container_width=True, type="secondary"):
+            st.session_state["queued_question"] = "Which employers had the largest month-over-month increase in liability amount due?"
+            st.rerun()
+        if st.button("Example 2: Variance Analysis", use_container_width=True, type="secondary"):
+            st.session_state["queued_question"] = "Show top FEINs by liability variance between start and end date."
+            st.rerun()
+        if st.button("Example 3: Trends", use_container_width=True, type="secondary"):
+            st.session_state["queued_question"] = "Summarize liability and wage amount trends by quarter and year."
+            st.rerun()
+
     bot = _get_bot(
         sql_file=sql_file,
         max_rows=int(max_rows),
@@ -328,15 +323,7 @@ def main() -> None:
     if "current_exchange" not in st.session_state:
         st.session_state["current_exchange"] = None
 
-    # Prompts/Examples FIRST (at the top, before chat input)
-    selected_prompt = _business_prompt_picker()
-    if selected_prompt:
-        st.session_state["queued_question"] = selected_prompt
-        st.rerun()
-
-    st.divider()
-
-    # Chat input comes AFTER prompts
+    # Chat input
     chat_question = st.chat_input("Ask your question (e.g. 'Show me top employers by liability amount')...")
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
 
