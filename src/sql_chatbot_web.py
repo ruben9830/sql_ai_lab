@@ -328,28 +328,19 @@ def main() -> None:
     if "current_exchange" not in st.session_state:
         st.session_state["current_exchange"] = None
 
-    # Results container BEFORE prompts (so results appear at top)
-    results_container = st.container()
-
-    selected_prompt = _business_prompt_picker()
-    if selected_prompt:
-        st.session_state["queued_question"] = selected_prompt
-        st.rerun()
-
+    # Chat input FIRST
     chat_question = st.chat_input("Ask your question (e.g. 'Show me top employers by liability amount')...")
     question = (chat_question or "").strip() or st.session_state.pop("queued_question", "")
 
+    # Results container (inline, not separate)
     if not question:
-        with results_container:
-            current = st.session_state.get("current_exchange")
-            if current:
-                with st.chat_message("user"):
-                    st.markdown(current["question"])
-                with st.chat_message("assistant"):
-                    _render_payload(current["payload"], key_prefix="current", bot=bot)
-        return
-
-    with results_container:
+        current = st.session_state.get("current_exchange")
+        if current:
+            with st.chat_message("user"):
+                st.markdown(current["question"])
+            with st.chat_message("assistant"):
+                _render_payload(current["payload"], key_prefix="current", bot=bot)
+    else:
         with st.chat_message("user"):
             st.markdown(question)
 
@@ -372,8 +363,14 @@ def main() -> None:
                     "library_size": len(bot.queries),
                 }
             _render_payload(payload, key_prefix="latest", bot=bot)
+        st.session_state["current_exchange"] = {"question": question, "payload": payload}
 
-    st.session_state["current_exchange"] = {"question": question, "payload": payload}
+    # Prompts AFTER results
+    st.divider()
+    selected_prompt = _business_prompt_picker()
+    if selected_prompt:
+        st.session_state["queued_question"] = selected_prompt
+        st.rerun()
 
 
 if __name__ == "__main__":

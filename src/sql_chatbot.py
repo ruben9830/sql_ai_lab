@@ -208,6 +208,19 @@ class SQLBibleChatbot:
         """Generate a business-focused title describing what the query will find."""
         sql_lower = sql.lower()
         
+        # Check for specific business patterns
+        if "not exists" in sql_lower and "wage" in sql_lower:
+            return "Employers Without Wage Reports"
+        
+        if "inac" in sql_lower or "status" in sql_lower and "inac" in sql:
+            return "Inactive Employers Analysis"
+        
+        if "delinquent" in sql_lower:
+            return "Delinquent Account Summary"
+        
+        if "tpa" in sql_lower:
+            return "TPA Provider Analysis"
+        
         if re.search(r"order by.*desc", sql_lower):
             if "liability" in sql_lower or "amount" in sql_lower:
                 return "Top Employers by Amount Due"
@@ -231,6 +244,12 @@ class SQLBibleChatbot:
         
         if "distinct" in sql_lower:
             return "Unique Records Query"
+        
+        # Fallback: extract first WHERE condition or main table
+        where_match = re.search(r"where\s+([a-z_.\"]+)\s*[=><]", sql_lower)
+        if where_match:
+            condition = where_match.group(1).strip('\"').split('.')[-1]
+            return f"Filtered by {condition.replace('_', ' ').title()}"
         
         match = re.search(r"from\s+([a-z_][a-z0-9_.]*)", sql_lower)
         if match:
