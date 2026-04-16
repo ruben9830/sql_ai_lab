@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -71,13 +72,36 @@ class JoinDraft:
 
 
 class SQLBibleChatbot:
-    def __init__(self, sql_file: Path, max_rows: int = 200):
+    def __init__(
+        self,
+        sql_file: Path,
+        max_rows: int = 200,
+        database_url: Optional[str] = None,
+        allowed_tables: Optional[set[str]] = None,
+    ):
         self.sql_file = sql_file
         self.max_rows = max_rows
         self.queries: List[QuerySnippet] = self._load_queries()
         self.client = self._build_openai_client()
-        self.database_url = os.getenv("DATABASE_URL", "").strip()
-        self.allowed_tables = self._load_allowed_tables()
+        self.database_url = (
+            database_url.strip() if isinstance(database_url, str) else os.getenv("DATABASE_URL", "").strip()
+        )
+        self.allowed_tables = allowed_tables if allowed_tables is not None else self._load_allowed_tables()
+
+    @staticmethod
+    def _is_sqlite_url(url: str) -> bool:
+        return url.lower().startswith("sqlite:///")
+
+    @staticmethod
+    def _sqlite_path_from_url(url: str) -> str:
+        return url[len("sqlite:///") :]
+
+    def _connection_mode(self) -> str:
+        if not self.database_url:
+            return "none"
+        if self._is_sqlite_url(self.database_url):
+            return "sqlite"
+        return "postgres"
 
     @staticmethod
     def _load_allowed_tables() -> set[str]:
@@ -387,10 +411,26 @@ class SQLBibleChatbot:
         return "public", table_name
 
     def _table_has_column(self, table_name: str, column_name: str) -> Optional[bool]:
-        if not self.database_url or psycopg is None:
+        if not self.database_url:
             return None
 
+        mode = self._connection_mode()
         schema_name, simple_table = self._split_table_name(table_name)
+
+        if mode == "sqlite":
+            try:
+                sqlite_path = self._sqlite_path_from_url(self.database_url)
+                with sqlite3.connect(sqlite_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute(f"PRAGMA table_info({simple_table})")
+                    cols = cur.fetchall()
+                    known_cols = {str(row[1]).lower() for row in cols}
+                    return column_name.lower() in known_cols
+            except Exception:
+                return None
+
+        if psycopg is None:
+            return None
 
         try:
             with psycopg.connect(self.database_url) as conn:
@@ -625,6 +665,65 @@ class SQLBibleChatbot:
 
         return True, normalized, ""
 
+    @staticmethod
+    def _adapt_params_for_sqlite(params: Optional[dict]) -> dict:
+        if not isinstance(params, dict):
+            return {}
+        return {str(k): v for k, v in params.items()}
+
+    @staticmethod
+    def _adapt_named_placeholders_for_sqlite(sql: str) -> str:
+        # Convert psycopg style %(name)s placeholders to sqlite style :name placeholders.
+        return re.sub(r"%\((\w+)\)s", r":\1", sql)
+
+    def probe_connection(self) -> dict:
+        if not self.database_url:
+            return {"ok": False, "mode": "none", "message": "No database configured."}
+
+        mode = self._connection_mode()
+        if mode == "sqlite":
+            try:
+                sqlite_path = self._sqlite_path_from_url(self.database_url)
+                with sqlite3.connect(sqlite_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table'")
+                    table_count = int((cur.fetchone() or [0])[0])
+                return {
+                    "ok": True,
+                    "mode": "sqlite",
+                    "message": f"SQLite connected ({table_count} tables discovered).",
+                    "table_count": table_count,
+                }
+            except Exception as exc:
+                return {"ok": False, "mode": "sqlite", "message": f"SQLite connection failed: {exc}"}
+
+        if psycopg is None:
+            return {
+                "ok": False,
+                "mode": "postgres",
+                "message": "psycopg is not installed. Run: pip install -r requirements.txt",
+            }
+
+        try:
+            with psycopg.connect(self.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT count(*)
+                        FROM information_schema.tables
+                        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                        """
+                    )
+                    table_count = int((cur.fetchone() or [0])[0])
+            return {
+                "ok": True,
+                "mode": "postgres",
+                "message": f"Postgres connected ({table_count} tables discovered).",
+                "table_count": table_count,
+            }
+        except Exception as exc:
+            return {"ok": False, "mode": "postgres", "message": f"Postgres connection failed: {exc}"}
+
     def run_query_with_params(self, sql: str, params: dict) -> dict:
         if not self._is_read_only_sql(sql):
             return {"ok": False, "error": "Only read-only SELECT/WITH SQL is allowed."}
@@ -640,13 +739,27 @@ class SQLBibleChatbot:
         if not self.database_url:
             return {"ok": False, "error": "DATABASE_URL is not set."}
 
+        mode = self._connection_mode()
+        if mode == "sqlite":
+            try:
+                sqlite_path = self._sqlite_path_from_url(self.database_url)
+                sqlite_sql = self._adapt_named_placeholders_for_sqlite(sql)
+                with sqlite3.connect(sqlite_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute(sqlite_sql, self._adapt_params_for_sqlite(params))
+                    rows = cur.fetchall()
+                    cols = [d[0] for d in cur.description] if cur.description else []
+                return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         if psycopg is None:
             return {"ok": False, "error": "psycopg is not installed. Run: pip install -r requirements.txt"}
 
         try:
             with psycopg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(sql, params)
+                    cur.execute(sql, params)  # type: ignore[arg-type]
                     cols = [d.name for d in cur.description] if cur.description else []
                     rows = cur.fetchall() if cols else []
             return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -695,15 +808,28 @@ class SQLBibleChatbot:
         if not self.database_url:
             return {"ok": False, "error": "DATABASE_URL is not set."}
 
+        safe_sql = sql.strip().rstrip(";") + f"\nLIMIT {self.max_rows};"
+
+        mode = self._connection_mode()
+        if mode == "sqlite":
+            try:
+                sqlite_path = self._sqlite_path_from_url(self.database_url)
+                with sqlite3.connect(sqlite_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute(safe_sql)
+                    cols = [d[0] for d in cur.description] if cur.description else []
+                    rows = cur.fetchall() if cols else []
+                return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows)}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         if psycopg is None:
             return {"ok": False, "error": "psycopg is not installed. Run: pip install -r requirements.txt"}
-
-        safe_sql = sql.strip().rstrip(";") + f"\nLIMIT {self.max_rows};"
 
         try:
             with psycopg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(safe_sql)
+                    cur.execute(safe_sql)  # type: ignore[arg-type]
                     cols = [d.name for d in cur.description] if cur.description else []
                     rows = cur.fetchall() if cols else []
             return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -724,11 +850,10 @@ class SQLBibleChatbot:
             candidate_ids = llm_plan.get("candidate_ids") or []
 
             if action == "run_query" and sql:
-                result = self.run_query(sql)
                 return {
-                    "mode": "llm_run_query",
+                    "mode": "llm_proposed_query",
                     "plan": llm_plan,
-                    "result": result,
+                    "proposed_sql": sql,
                     "intent": intent.to_dict(),
                     "join_draft": join_draft.to_dict() if join_draft else None,
                     "fallback_candidates": [self._q_to_dict(q) for q in candidates],

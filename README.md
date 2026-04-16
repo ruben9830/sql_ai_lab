@@ -58,13 +58,22 @@ pip install -r requirements.txt
 Web UI features:
 
 - Chat interface with conversation history
+- Dual data modes: `Demo (SQLite)` and `Enterprise (Postgres)`
 - Quick filters for `start date`, `end date`, `FEIN`, and `employer id`
 - Quarter/year filters for wage-period questions
+- One-click business prompts for fast demos
+- SQL approval step (`Approve and Run SQL`) before execution
 - Download query results as CSV when a query is executed
 - Auto-generated JOIN drafts for multi-table questions (liability + wages)
 - JOIN draft confidence and parameter map for safer execution review
 - One-click `Run JOIN Draft` with required parameter validation
 - Schema-aware join-key verification before JOIN draft execution
+
+Demo mode notes:
+
+- Demo mode auto-creates `data/demo_hackathon.db` with synthetic data
+- No VPN or enterprise DB setup required for a live demo
+- Connection health status is shown in the UI (mode + table discovery)
 
 ## Smart JOIN Drafting
 
