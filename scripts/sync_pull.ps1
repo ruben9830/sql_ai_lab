@@ -14,13 +14,13 @@ function Require-Command {
 
 function Invoke-Git {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Args
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs
     )
 
-    & git @Args
+    & git @GitArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "git command failed: git $($Args -join ' ')"
+        throw "git command failed: git $($GitArgs -join ' ')"
     }
 }
 
@@ -31,7 +31,7 @@ if (-not $branch -or $branch -eq "HEAD") {
     $branch = "master"
 }
 
-Invoke-Git fetch origin --prune
-Invoke-Git pull --rebase origin $branch
+Invoke-Git -GitArgs @("fetch", "origin", "--prune")
+Invoke-Git -GitArgs @("pull", "--rebase", "origin", $branch)
 
 Write-Host "Up to date on origin/$branch"

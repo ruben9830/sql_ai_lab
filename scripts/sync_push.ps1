@@ -20,13 +20,13 @@ function Require-Command {
 
 function Invoke-Git {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Args
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs
     )
 
-    & git @Args
+    & git @GitArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "git command failed: git $($Args -join ' ')"
+        throw "git command failed: git $($GitArgs -join ' ')"
     }
 }
 
@@ -38,11 +38,11 @@ if (-not $branch -or $branch -eq "HEAD") {
 }
 
 if (-not $NoPull) {
-    Invoke-Git fetch origin --prune
-    Invoke-Git pull --rebase origin $branch
+    Invoke-Git -GitArgs @("fetch", "origin", "--prune")
+    Invoke-Git -GitArgs @("pull", "--rebase", "origin", $branch)
 }
 
-Invoke-Git add -A
+Invoke-Git -GitArgs @("add", "-A")
 & git diff --cached --quiet
 if ($LASTEXITCODE -eq 0) {
     Write-Host "No staged changes to commit."
@@ -52,7 +52,7 @@ if ($LASTEXITCODE -eq 0) {
 $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $finalMessage = "$Message [$stamp]"
 
-Invoke-Git commit -m $finalMessage
-Invoke-Git push -u origin $branch
+Invoke-Git -GitArgs @("commit", "-m", $finalMessage)
+Invoke-Git -GitArgs @("push", "-u", "origin", $branch)
 
 Write-Host "Pushed to origin/$branch"
