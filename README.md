@@ -68,6 +68,34 @@ Web UI features:
 - JOIN draft confidence and parameter map for safer execution review
 - One-click `Run JOIN Draft` with required parameter validation
 - Schema-aware join-key verification before JOIN draft execution
+- Public CSV import from web/GitHub raw URLs into Demo SQLite mode
+- In-app table preview for imported public datasets
+
+## Easiest Way to Run (Non-Technical)
+
+On any Windows machine (work laptop or home PC):
+
+1. Open the project folder.
+2. Double-click `run_streamlit.bat`.
+3. Wait for setup (first run only), then your browser opens automatically.
+
+Tip:
+
+- If you accidentally run `run_stramlit.bat` (common typo), it now redirects to the correct launcher.
+
+What this launcher does for you automatically:
+
+- Pulls latest changes from GitHub when possible
+- Creates `.venv` if missing
+- Installs/updates required packages
+- Creates `.env` from `.env.example` (if needed)
+- Starts the Streamlit app
+
+Notes:
+
+- Demo mode works immediately with no VPN and no enterprise database.
+- You can use the same project folder on both machines.
+- If GitHub login is needed, the launcher will still run and skip sync.
 
 Demo mode notes:
 

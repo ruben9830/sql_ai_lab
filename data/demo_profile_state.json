@@ -1,0 +1,18 @@
+{
+  "profiles": [
+    {
+      "name": "Default",
+      "db_path": "data/demo_baseball.db"
+    },
+    {
+      "name": "Baseball",
+      "db_path": "data/demo_baseball.db"
+    }
+  ],
+  "last_profile": "Baseball",
+  "last_active_table_by_profile": {
+    "Default": "public_dataset",
+    "Baseball": "mlb_data_freshness"
+  },
+  "favorite_tables_by_profile": {}
+}

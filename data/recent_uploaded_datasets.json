@@ -1,0 +1,10 @@
+[
+  {
+    "table_name": "public_dataset",
+    "source_name": "stats.csv",
+    "row_count": 170,
+    "db_path": "data/demo_baseball.db",
+    "profile_name": "Baseball",
+    "updated_at": "2026-04-22 12:46:14"
+  }
+]
