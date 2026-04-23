@@ -185,3 +185,31 @@ powershell -ExecutionPolicy Bypass -File scripts/git_checkpoint.ps1 -Message "im
 ```
 
 This command initializes git (first run), stages all changes, creates a timestamped commit, and pushes the current branch.
+
+## Seamless Two-Laptop Workflow
+
+Run this one-time setup on each machine (work laptop and personal laptop):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_github_sync.ps1 -Repo "ruben9830/sql_ai_lab"
+```
+
+Daily flow:
+
+1. Start of session (pull latest):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/sync_pull.ps1
+```
+
+2. End of session (commit + push):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/sync_push.ps1 -Message "what changed"
+```
+
+Notes:
+
+- `sync_push.ps1` auto-runs fetch + pull rebase first to reduce branch drift.
+- If there are no file changes, `sync_push.ps1` exits cleanly without creating empty commits.
+- Keep using `run_streamlit.bat` for one-click app launch; it already attempts a best-effort git pull on startup.

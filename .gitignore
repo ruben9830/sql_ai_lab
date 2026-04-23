@@ -18,3 +18,9 @@ venv/
 
 # Local backups (keep out of git history)
 backups/
+
+# Local runtime artifacts
+.launcher_last_run.log
+
+# Local personal files accidentally dropped in workspace
+Employer 940 Certificate.pdf
